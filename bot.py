@@ -19,7 +19,7 @@ ROLLE_BESUCHER = "Besucher"
 ROLLE_AUSBILDER = (
     "Ausbilder"  # <-- Trage hier exakt den Namen deiner Ausbilder-Rolle ein!
 )
-UHRZEIT_POST = time(hour=15, minute=0)
+UHRZEIT_POST = time(hour=09, minute=0)
 
 
 # --- DATENBANK EINRICHTUNG ---
