@@ -16,7 +16,7 @@ TICKET_LOG_KANAL_ID = 1562630985303064707  # KANAL FÜR TICKET-BENACHRICHTIGUNGE
 
 ROLLE_ARMY = "Army"
 ROLLE_BESUCHER = "Besucher"  # Rolle für verifizierte Besucher
-UHRZEIT_POST = time(hour=15, minute=0)
+UHRZEIT_POST = time(hour=9, minute=0)
 
 
 # --- DATENBANK EINRICHTUNG ---
@@ -410,7 +410,7 @@ class AufstellungView(discord.ui.View):
     await self.update_attendance(interaction, "spaeter")
 
 
-# --- MODALS ---
+# --- MODALS & SYSTEMS ---
 class TicketErstellenModal(
     discord.ui.Modal, title="Support-Ticket / Beschwerde"
 ):
@@ -427,7 +427,6 @@ class TicketErstellenModal(
     guild = interaction.guild
     user = interaction.user
 
-    # Erstelle privaten Ticket-Kanal
     overwrites = {
         guild.default_role: discord.PermissionOverwrite(read_messages=False),
         user: discord.PermissionOverwrite(
@@ -438,7 +437,6 @@ class TicketErstellenModal(
         ),
     }
 
-    # Admins auch Rechte geben
     for role in guild.roles:
       if role.permissions.administrator:
         overwrites[role] = discord.PermissionOverwrite(
@@ -492,7 +490,6 @@ class TicketErstellenModal(
         view=TicketCloseView(),
     )
 
-    # Benachrichtigung im Log-Kanal
     log_channel = guild.get_channel(TICKET_LOG_KANAL_ID)
     if log_channel:
       log_embed = discord.Embed(
@@ -515,10 +512,10 @@ class TicketErstellenModal(
 
 class BewerbungModal(discord.ui.Modal, title="Bewerbung bei der Army"):
   ic_name = discord.ui.TextInput(
-      label="Dein IC-Name", placeholder="z.B. John Doe"
+      label="Dein IC-Name", placeholder="z.B. John Doe", required=True
   )
   ooc_alter = discord.ui.TextInput(
-      label="Dein OOC-Alter", placeholder="z.B. 18"
+      label="Dein OOC-Alter", placeholder="z.B. 18", required=True
   )
   bewerbungstext = discord.ui.TextInput(
       label="Warum möchtest du zur Army?",
@@ -527,18 +524,42 @@ class BewerbungModal(discord.ui.Modal, title="Bewerbung bei der Army"):
           "Schreibe hier deinen Bewerbungstext und deine bisherigen"
           " Erfahrungen..."
       ),
+      required=True,
   )
 
   async def on_submit(self, interaction: discord.Interaction):
     guild = interaction.guild
     user = interaction.user
 
-    log_channel = guild.get_channel(BEWERBUNG_LOG_KANAL_ID)
+    # 1. Privaten Bewerbungskanal erstellen
+    overwrites = {
+        guild.default_role: discord.PermissionOverwrite(read_messages=False),
+        user: discord.PermissionOverwrite(
+            read_messages=True, send_messages=True
+        ),
+        guild.me: discord.PermissionOverwrite(
+            read_messages=True, send_messages=True
+        ),
+    }
 
+    for role in guild.roles:
+      if role.permissions.administrator:
+        overwrites[role] = discord.PermissionOverwrite(
+            read_messages=True, send_messages=True
+        )
+
+    clean_name = self.ic_name.value.lower().replace(" ", "-")
+    channel_name = f"bewerbung-{clean_name}"
+
+    app_channel = await guild.create_text_channel(
+        name=channel_name, overwrites=overwrites
+    )
+
+    # 2. Embed mit den Bewerbungsdaten
     embed = discord.Embed(
-        title=f"🎖️ Neue Bewerbung von {self.ic_name.value}",
+        title=f"🎖️ Neue Bewerbung: {self.ic_name.value}",
         description=(
-            f"**Discord-User:** {user.mention}\n**IC-Name:**"
+            f"**Bewerber:** {user.mention}\n**IC-Name:**"
             f" {self.ic_name.value}\n**OOC-Alter:**"
             f" {self.ooc_alter.value}\n\n**Bewerbungstext:**\n{self.bewerbungstext.value}"
         ),
@@ -548,6 +569,7 @@ class BewerbungModal(discord.ui.Modal, title="Bewerbung bei der Army"):
         url=user.avatar.url if user.avatar else user.default_avatar.url
     )
 
+    # 3. Interaktions-Buttons
     class BewerbungActionView(discord.ui.View):
 
       def __init__(self):
@@ -556,6 +578,7 @@ class BewerbungModal(discord.ui.Modal, title="Bewerbung bei der Army"):
       @discord.ui.button(
           label="Annehmen",
           style=discord.ButtonStyle.green,
+          emoji="✅",
           custom_id="btn_accept_app",
       )
       async def accept(
@@ -564,25 +587,41 @@ class BewerbungModal(discord.ui.Modal, title="Bewerbung bei der Army"):
           button: discord.ui.Button,
       ):
         await interaction_act.response.send_message(
-            f"✅ Bewerbung von {user.mention} wurde von"
-            f" {interaction_act.user.mention} **ANGENOMMEN**!"
+            f"✅ Bewerbung wurde von {interaction_act.user.mention}"
+            " **ANGENOMMEN**! Kanal wird in 10 Sekunden gelöscht..."
         )
+
+        army_role = discord.utils.get(guild.roles, name=ROLLE_ARMY)
+        besucher_role = discord.utils.get(guild.roles, name=ROLLE_BESUCHER)
+
+        if army_role:
+          await user.add_roles(army_role)
+        if besucher_role and besucher_role in user.roles:
+          await user.remove_roles(besucher_role)
+
         try:
           await user.send(
-              "🎉 Deine Bewerbung bei der Army wurde **ANGENOMMEN**! Bitte"
-              " finde dich im HQ zum Gespräch ein."
+              "🎉 **Glückwunsch!** Deine Bewerbung bei der Army wurde"
+              " **ANGENOMMEN**!"
           )
         except Exception:
           pass
+
         log_action(
             "Bewerbung Angenommen",
-            f"Bewerber: {self.ic_name.value}",
+            f"Bewerber: {user.display_name}",
             interaction_act.user.display_name,
         )
+
+        import asyncio
+
+        await asyncio.sleep(10)
+        await app_channel.delete()
 
       @discord.ui.button(
           label="Ablehnen",
           style=discord.ButtonStyle.red,
+          emoji="❌",
           custom_id="btn_reject_app",
       )
       async def reject(
@@ -591,27 +630,52 @@ class BewerbungModal(discord.ui.Modal, title="Bewerbung bei der Army"):
           button: discord.ui.Button,
       ):
         await interaction_act.response.send_message(
-            f"❌ Bewerbung von {user.mention} wurde von"
-            f" {interaction_act.user.mention} **ABGELEHNT**."
+            f"❌ Bewerbung wurde von {interaction_act.user.mention}"
+            " **ABGELEHNT**. Kanal wird in 10 Sekunden gelöscht..."
         )
+
         try:
-          await user.send("Leider wurde deine Bewerbung bei der Army **ABGELEHNT**.")
+          await user.send(
+              "Leider wurde deine Bewerbung bei der Army **ABGELEHNT**."
+          )
         except Exception:
           pass
+
         log_action(
             "Bewerbung Ablehnt",
-            f"Bewerber: {self.ic_name.value}",
+            f"Bewerber: {user.display_name}",
             interaction_act.user.display_name,
         )
 
+        import asyncio
+
+        await asyncio.sleep(10)
+        await app_channel.delete()
+
+    await app_channel.send(
+        content=(
+            f"Hallo {user.mention}! Hier ist dein privater Bewerbungskanal. Die"
+            " Führungsebene wird sich in Kürze bei dir melden."
+        ),
+        embed=embed,
+        view=BewerbungActionView(),
+    )
+
+    log_channel = guild.get_channel(BEWERBUNG_LOG_KANAL_ID)
     if log_channel:
-      await log_channel.send(embed=embed, view=BewerbungActionView())
+      log_embed = discord.Embed(
+          title="📩 Neue Bewerbung eingegangen",
+          description=(
+              f"**Bewerber:** {user.mention}\n**Kanal:** {app_channel.mention}"
+          ),
+          color=discord.Color.green(),
+      )
+      await log_channel.send(embed=log_embed)
 
     log_action("Bewerbung Eingereicht", f"IC: {self.ic_name.value}", user.name)
 
     await interaction.response.send_message(
-        "✅ Deine Bewerbung wurde erfolgreich eingereicht und wird von der"
-        " Führungsebene geprüft!",
+        f"✅ Dein Bewerbungskanal wurde erstellt: {app_channel.mention}",
         ephemeral=True,
     )
 
@@ -1162,7 +1226,7 @@ async def on_ready():
   print(f"Eingeloggt als {bot.user}")
 
 
-# --- NEW & UPDATED COMMANDS ---
+# --- COMMANDS ---
 @bot.tree.command(
     name="ticketpanel", description="Sendet das Support & Ticket Panel"
 )
