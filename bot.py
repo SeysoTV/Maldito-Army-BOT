@@ -514,7 +514,7 @@ class TicketErstellenModal(
     )
 
 
-# --- BEWERBUNGSSYSTEM (ERST LOG-KANAL, BEI ANNAHME GESPRÄCHSKANAL) ---
+# --- BEWERBUNGSSYSTEM (ERST LOG-KANAL, ERST BEI ANNAHME WIRD DER KANAL ERSTELLT) ---
 class BewerbungModal(discord.ui.Modal, title="Bewerbung bei der Army"):
   ic_name = discord.ui.TextInput(
       label="Dein IC-Name", placeholder="z.B. John Doe", required=True
@@ -539,8 +539,8 @@ class BewerbungModal(discord.ui.Modal, title="Bewerbung bei der Army"):
     log_channel = guild.get_channel(BEWERBUNG_LOG_KANAL_ID)
     if not log_channel:
       await interaction.response.send_message(
-          "❌ Fehler: Der Admin-Bewerbungskanal wurde im Code nicht gefunden"
-          " oder ist ungültig!",
+          "❌ Fehler: Der Admin-Bewerbungskanal (`BEWERBUNG_LOG_KANAL_ID`) wurde"
+          " nicht gefunden!",
           ephemeral=True,
       )
       return
@@ -558,6 +558,9 @@ class BewerbungModal(discord.ui.Modal, title="Bewerbung bei der Army"):
     embed.set_thumbnail(
         url=user.avatar.url if user.avatar else user.default_avatar.url
     )
+
+    # Lokale Daten speichern für die Aktion
+    ic_val = self.ic_name.value
 
     class AdminBewerbungActionView(discord.ui.View):
 
@@ -591,6 +594,7 @@ class BewerbungModal(discord.ui.Modal, title="Bewerbung bei der Army"):
 
         await interaction_act.response.defer(ephemeral=True)
 
+        # Erst HIER wird der Kanal erstellt!
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(
                 read_messages=False
@@ -611,7 +615,7 @@ class BewerbungModal(discord.ui.Modal, title="Bewerbung bei der Army"):
                 read_messages=True, send_messages=True
             )
 
-        clean_name = self.ic_name.value.lower().replace(" ", "-")
+        clean_name = ic_val.lower().replace(" ", "-")
         channel_name = f"bewerbung-{clean_name}"
         app_channel = await guild.create_text_channel(
             name=channel_name, overwrites=overwrites
@@ -644,7 +648,7 @@ class BewerbungModal(discord.ui.Modal, title="Bewerbung bei der Army"):
             interaction_act.user.display_name,
         )
 
-        # Ursprüngliche Nachricht im Log-Kanal aktualisieren (ohne Buttons, damit man nicht doppelt klickt)
+        # Nachricht im Log-Kanal aktualisieren
         await interaction_act.message.edit(
             content=(
                 f"✅ **Bewerbung angenommen von {interaction_act.user.mention}**"
@@ -707,6 +711,7 @@ class BewerbungModal(discord.ui.Modal, title="Bewerbung bei der Army"):
             "Bewerbung erfolgreich abgelehnt.", ephemeral=True
         )
 
+    # Bewerbung NUR in den Log-Kanal schicken
     await log_channel.send(embed=embed, view=AdminBewerbungActionView())
     log_action("Bewerbung Eingereicht", f"IC: {self.ic_name.value}", user.name)
 
