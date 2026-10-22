@@ -16,10 +16,8 @@ TICKET_LOG_KANAL_ID = 1562630985303064707  # KANAL FÜR TICKET-BENACHRICHTIGUNGE
 
 ROLLE_ARMY = "Army"
 ROLLE_BESUCHER = "Besucher"
-ROLLE_AUSBILDER = (
-    "Ausbilder"  # <-- Trage hier exakt den Namen deiner Ausbilder-Rolle ein!
-)
-UHRZEIT_POST = time(hour=09, minute=0)
+ROLLE_AUSBILDER = "Ausbilder"
+UHRZEIT_POST = time(hour=15, minute=0)
 
 
 # --- DATENBANK EINRICHTUNG ---
@@ -547,7 +545,6 @@ class BewerbungModal(discord.ui.Modal, title="Bewerbung bei der Army"):
       )
       return
 
-    # Embed für den Admin-Log-Kanal
     embed = discord.Embed(
         title=f"🎖️ Neue Bewerbung: {self.ic_name.value}",
         description=(
@@ -562,7 +559,6 @@ class BewerbungModal(discord.ui.Modal, title="Bewerbung bei der Army"):
         url=user.avatar.url if user.avatar else user.default_avatar.url
     )
 
-    # Interaktions-Buttons für Admins/Ausbilder im Log-Kanal
     class AdminBewerbungActionView(discord.ui.View):
 
       def __init__(self):
@@ -579,7 +575,6 @@ class BewerbungModal(discord.ui.Modal, title="Bewerbung bei der Army"):
           interaction_act: discord.Interaction,
           button: discord.ui.Button,
       ):
-        # Prüfen ob Ausbilder oder Admin
         ausbilder_role = discord.utils.get(guild.roles, name=ROLLE_AUSBILDER)
         is_admin = interaction_act.user.guild_permissions.administrator
         has_ausbilder = (
@@ -596,7 +591,6 @@ class BewerbungModal(discord.ui.Modal, title="Bewerbung bei der Army"):
 
         await interaction_act.response.defer(ephemeral=True)
 
-        # 1. Privaten Gesprächskanal erstellen
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(
                 read_messages=False
@@ -623,7 +617,6 @@ class BewerbungModal(discord.ui.Modal, title="Bewerbung bei der Army"):
             name=channel_name, overwrites=overwrites
         )
 
-        # 2. Nachricht in den neuen Kanal senden
         ping_text = (
             f"{user.mention} {ausbilder_role.mention if ausbilder_role else ''}"
         )
@@ -635,7 +628,6 @@ class BewerbungModal(discord.ui.Modal, title="Bewerbung bei der Army"):
             embed=embed,
         )
 
-        # DM an den Bewerber
         try:
           await user.send(
               "🎉 Deine Bewerbung wurde von der Führungsebene vorab"
@@ -652,7 +644,7 @@ class BewerbungModal(discord.ui.Modal, title="Bewerbung bei der Army"):
             interaction_act.user.display_name,
         )
 
-        # Ursprüngliche Nachricht im Log-Kanal aktualisieren
+        # Ursprüngliche Nachricht im Log-Kanal aktualisieren (ohne Buttons, damit man nicht doppelt klickt)
         await interaction_act.message.edit(
             content=(
                 f"✅ **Bewerbung angenommen von {interaction_act.user.mention}**"
@@ -660,7 +652,7 @@ class BewerbungModal(discord.ui.Modal, title="Bewerbung bei der Army"):
             ),
             view=None,
         )
-        await interaction_act.followop.send(
+        await interaction_act.followup.send(
             f"✅ Gesprächskanal erstellt: {app_channel.mention}", ephemeral=True
         )
 
@@ -715,9 +707,7 @@ class BewerbungModal(discord.ui.Modal, title="Bewerbung bei der Army"):
             "Bewerbung erfolgreich abgelehnt.", ephemeral=True
         )
 
-    # Bewerbung in den Log-Kanal schicken
     await log_channel.send(embed=embed, view=AdminBewerbungActionView())
-
     log_action("Bewerbung Eingereicht", f"IC: {self.ic_name.value}", user.name)
 
     await interaction.response.send_message(
