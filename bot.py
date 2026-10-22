@@ -440,7 +440,6 @@ class TicketErstellenModal(
         ),
     }
 
-    # Admins und Ausbilder hinzufügen
     ausbilder_role = discord.utils.get(guild.roles, name=ROLLE_AUSBILDER)
     for role in guild.roles:
       if role.permissions.administrator or (
@@ -517,7 +516,7 @@ class TicketErstellenModal(
     )
 
 
-# --- BEWERBUNGSSYSTEM (MIT AUSBILDER-RECHTEN & CHAT-FOKUS) ---
+# --- BEWERBUNGSSYSTEM (ERST LOG-KANAL, BEI ANNAHME GESPRÄCHSKANAL) ---
 class BewerbungModal(discord.ui.Modal, title="Bewerbung bei der Army"):
   ic_name = discord.ui.TextInput(
       label="Dein IC-Name", placeholder="z.B. John Doe", required=True
@@ -539,41 +538,23 @@ class BewerbungModal(discord.ui.Modal, title="Bewerbung bei der Army"):
     guild = interaction.guild
     user = interaction.user
 
-    # 1. Privaten Bewerbungskanal erstellen (Admin + Ausbilder + Bewerber haben Zugriff)
-    overwrites = {
-        guild.default_role: discord.PermissionOverwrite(read_messages=False),
-        user: discord.PermissionOverwrite(
-            read_messages=True, send_messages=True
-        ),
-        guild.me: discord.PermissionOverwrite(
-            read_messages=True, send_messages=True
-        ),
-    }
+    log_channel = guild.get_channel(BEWERBUNG_LOG_KANAL_ID)
+    if not log_channel:
+      await interaction.response.send_message(
+          "❌ Fehler: Der Admin-Bewerbungskanal wurde im Code nicht gefunden"
+          " oder ist ungültig!",
+          ephemeral=True,
+      )
+      return
 
-    ausbilder_role = discord.utils.get(guild.roles, name=ROLLE_AUSBILDER)
-    for role in guild.roles:
-      if role.permissions.administrator or (
-          ausbilder_role and role == ausbilder_role
-      ):
-        overwrites[role] = discord.PermissionOverwrite(
-            read_messages=True, send_messages=True
-        )
-
-    clean_name = self.ic_name.value.lower().replace(" ", "-")
-    channel_name = f"bewerbung-{clean_name}"
-
-    app_channel = await guild.create_text_channel(
-        name=channel_name, overwrites=overwrites
-    )
-
-    # 2. Embed mit den Bewerbungsdaten
+    # Embed für den Admin-Log-Kanal
     embed = discord.Embed(
         title=f"🎖️ Neue Bewerbung: {self.ic_name.value}",
         description=(
-            f"Besprecht hier im Chat **wann und wo** das Gespräch stattfindet!\n\n"
-            f"**Bewerber:** {user.mention}\n**IC-Name:**"
-            f" {self.ic_name.value}\n**OOC-Alter:**"
-            f" {self.ooc_alter.value}\n\n**Bewerbungstext:**\n{self.bewerbungstext.value}"
+            f"**Bewerber:** {user.mention}\n"
+            f"**IC-Name:** {self.ic_name.value}\n"
+            f"**OOC-Alter:** {self.ooc_alter.value}\n\n"
+            f"**Bewerbungstext:**\n{self.bewerbungstext.value}"
         ),
         color=discord.Color.blue(),
     )
@@ -581,46 +562,107 @@ class BewerbungModal(discord.ui.Modal, title="Bewerbung bei der Army"):
         url=user.avatar.url if user.avatar else user.default_avatar.url
     )
 
-    # 3. Interaktions-Buttons (Ohne automatische Army-Rolle beim Annehmen)
-    class BewerbungActionView(discord.ui.View):
+    # Interaktions-Buttons für Admins/Ausbilder im Log-Kanal
+    class AdminBewerbungActionView(discord.ui.View):
 
       def __init__(self):
         super().__init__(timeout=None)
 
       @discord.ui.button(
-          label="Annehmen (Gespräch beendet)",
+          label="Annehmen & Gesprächskanal öffnen",
           style=discord.ButtonStyle.green,
           emoji="✅",
-          custom_id="btn_accept_app",
+          custom_id="btn_accept_and_open_chat",
       )
       async def accept(
           self,
           interaction_act: discord.Interaction,
           button: discord.ui.Button,
       ):
-        await interaction_act.response.send_message(
-            f"✅ Bewerbung wurde von {interaction_act.user.mention}"
-            " **AKZEPTIERT**! Kanal wird in 10 Sekunden geschlossen..."
+        # Prüfen ob Ausbilder oder Admin
+        ausbilder_role = discord.utils.get(guild.roles, name=ROLLE_AUSBILDER)
+        is_admin = interaction_act.user.guild_permissions.administrator
+        has_ausbilder = (
+            ausbilder_role in interaction_act.user.roles
+            if ausbilder_role
+            else False
         )
 
+        if not (is_admin or has_ausbilder):
+          await interaction_act.response.send_message(
+              "❌ Dazu hast du keine Berechtigung!", ephemeral=True
+          )
+          return
+
+        await interaction_act.response.defer(ephemeral=True)
+
+        # 1. Privaten Gesprächskanal erstellen
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(
+                read_messages=False
+            ),
+            user: discord.PermissionOverwrite(
+                read_messages=True, send_messages=True
+            ),
+            guild.me: discord.PermissionOverwrite(
+                read_messages=True, send_messages=True
+            ),
+        }
+
+        for role in guild.roles:
+          if role.permissions.administrator or (
+              ausbilder_role and role == ausbilder_role
+          ):
+            overwrites[role] = discord.PermissionOverwrite(
+                read_messages=True, send_messages=True
+            )
+
+        clean_name = self.ic_name.value.lower().replace(" ", "-")
+        channel_name = f"bewerbung-{clean_name}"
+        app_channel = await guild.create_text_channel(
+            name=channel_name, overwrites=overwrites
+        )
+
+        # 2. Nachricht in den neuen Kanal senden
+        ping_text = (
+            f"{user.mention} {ausbilder_role.mention if ausbilder_role else ''}"
+        )
+        await app_channel.send(
+            content=(
+                f"{ping_text} **Bewerbung angenommen!** Klärt hier im Chat ab,"
+                " wann und wo das Treffen / Gespräch stattfindet."
+            ),
+            embed=embed,
+        )
+
+        # DM an den Bewerber
         try:
           await user.send(
-              "🎉 **Glückwunsch!** Dein Vorgespräch / Deine Bewerbung bei der"
-              " Army war erfolgreich!"
+              "🎉 Deine Bewerbung wurde von der Führungsebene vorab"
+              " **gesichtet und angenommen**! Es wurde ein privater"
+              f" Gesprächskanal ({app_channel.mention}) auf dem Server"
+              " erstellt, um das Treffen zu vereinbaren."
           )
         except Exception:
           pass
 
         log_action(
-            "Bewerbung Akzeptiert",
-            f"Bewerber: {user.display_name}",
+            "Bewerbung Angenommen (Chat)",
+            f"Bewerber: {user.display_name} -> Kanal: {app_channel.name}",
             interaction_act.user.display_name,
         )
 
-        import asyncio
-
-        await asyncio.sleep(10)
-        await app_channel.delete()
+        # Ursprüngliche Nachricht im Log-Kanal aktualisieren
+        await interaction_act.message.edit(
+            content=(
+                f"✅ **Bewerbung angenommen von {interaction_act.user.mention}**"
+                f" — Gesprächskanal erstellt: {app_channel.mention}"
+            ),
+            view=None,
+        )
+        await interaction_act.followop.send(
+            f"✅ Gesprächskanal erstellt: {app_channel.mention}", ephemeral=True
+        )
 
       @discord.ui.button(
           label="Ablehnen",
@@ -633,15 +675,26 @@ class BewerbungModal(discord.ui.Modal, title="Bewerbung bei der Army"):
           interaction_act: discord.Interaction,
           button: discord.ui.Button,
       ):
-        await interaction_act.response.send_message(
-            f"❌ Bewerbung wurde von {interaction_act.user.mention}"
-            " **ABGELEHNT**. Kanal wird in 10 Sekunden geschlossen..."
+        ausbilder_role = discord.utils.get(guild.roles, name=ROLLE_AUSBILDER)
+        is_admin = interaction_act.user.guild_permissions.administrator
+        has_ausbilder = (
+            ausbilder_role in interaction_act.user.roles
+            if ausbilder_role
+            else False
         )
+
+        if not (is_admin or has_ausbilder):
+          await interaction_act.response.send_message(
+              "❌ Dazu hast du keine Berechtigung!", ephemeral=True
+          )
+          return
+
+        await interaction_act.response.defer(ephemeral=True)
 
         try:
           await user.send(
-              "Leider wurde deine Bewerbung bei der Army nach dem Gespräch"
-              " **ABGELEHNT**."
+              "Leider wurde deine Bewerbung bei der Army nach genauer Prüfung"
+              " **abgelehnt**."
           )
         except Exception:
           pass
@@ -652,38 +705,24 @@ class BewerbungModal(discord.ui.Modal, title="Bewerbung bei der Army"):
             interaction_act.user.display_name,
         )
 
-        import asyncio
+        await interaction_act.message.edit(
+            content=(
+                f"❌ **Bewerbung abgelehnt von {interaction_act.user.mention}**"
+            ),
+            view=None,
+        )
+        await interaction_act.followup.send(
+            "Bewerbung erfolgreich abgelehnt.", ephemeral=True
+        )
 
-        await asyncio.sleep(10)
-        await app_channel.delete()
-
-    ping_text = (
-        f"{user.mention} {ausbilder_role.mention if ausbilder_role else ''}"
-    )
-    await app_channel.send(
-        content=(
-            f"{ping_text} **Neuer Bewerbungskanal!** Klärt hier im Chat ab,"
-            " wann und wo das Treffen stattfindet."
-        ),
-        embed=embed,
-        view=BewerbungActionView(),
-    )
-
-    log_channel = guild.get_channel(BEWERBUNG_LOG_KANAL_ID)
-    if log_channel:
-      log_embed = discord.Embed(
-          title="📩 Neue Bewerbung eingegangen",
-          description=(
-              f"**Bewerber:** {user.mention}\n**Kanal:** {app_channel.mention}"
-          ),
-          color=discord.Color.green(),
-      )
-      await log_channel.send(embed=log_embed)
+    # Bewerbung in den Log-Kanal schicken
+    await log_channel.send(embed=embed, view=AdminBewerbungActionView())
 
     log_action("Bewerbung Eingereicht", f"IC: {self.ic_name.value}", user.name)
 
     await interaction.response.send_message(
-        f"✅ Dein Bewerbungskanal wurde erstellt: {app_channel.mention}",
+        "✅ Deine Bewerbung wurde erfolgreich eingereicht und wird von der"
+        " Führungsebene im HQ geprüft!",
         ephemeral=True,
     )
 
