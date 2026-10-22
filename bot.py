@@ -17,6 +17,7 @@ TICKET_LOG_KANAL_ID = 1562630985303064707  # KANAL FÜR TICKET-BENACHRICHTIGUNGE
 ROLLE_ARMY = "Army"
 ROLLE_BESUCHER = "Besucher"
 ROLLE_AUSBILDER = "Ausbilder"
+ROLLE_TICKETBEARBEITER = "Ticketbearbeiter"  # Rolle für die Ticket-Bearbeitung!
 UHRZEIT_POST = time(hour=15, minute=0)
 
 
@@ -411,7 +412,7 @@ class AufstellungView(discord.ui.View):
     await self.update_attendance(interaction, "spaeter")
 
 
-# --- TICKET SYSTEM ---
+# --- TICKET SYSTEM (NUR FÜR TICKETBEARBEITER & ADMINS) ---
 class TicketErstellenModal(
     discord.ui.Modal, title="Support-Ticket / Beschwerde"
 ):
@@ -438,11 +439,10 @@ class TicketErstellenModal(
         ),
     }
 
-    ausbilder_role = discord.utils.get(guild.roles, name=ROLLE_AUSBILDER)
+    # Nur Ticketbearbeiter und Admins hinzufügen
+    tb_role = discord.utils.get(guild.roles, name=ROLLE_TICKETBEARBEITER)
     for role in guild.roles:
-      if role.permissions.administrator or (
-          ausbilder_role and role == ausbilder_role
-      ):
+      if role.permissions.administrator or (tb_role and role == tb_role):
         overwrites[role] = discord.PermissionOverwrite(
             read_messages=True, send_messages=True
         )
@@ -514,7 +514,7 @@ class TicketErstellenModal(
     )
 
 
-# --- BEWERBUNGSSYSTEM (ERST LOG-KANAL, ERST BEI ANNAHME WIRD DER KANAL ERSTELLT) ---
+# --- BEWERBUNGSSYSTEM (FÜR AUSBILDER & ADMINS) ---
 class BewerbungModal(discord.ui.Modal, title="Bewerbung bei der Army"):
   ic_name = discord.ui.TextInput(
       label="Dein IC-Name", placeholder="z.B. John Doe", required=True
@@ -559,7 +559,6 @@ class BewerbungModal(discord.ui.Modal, title="Bewerbung bei der Army"):
         url=user.avatar.url if user.avatar else user.default_avatar.url
     )
 
-    # Lokale Daten speichern für die Aktion
     ic_val = self.ic_name.value
 
     class AdminBewerbungActionView(discord.ui.View):
@@ -594,7 +593,6 @@ class BewerbungModal(discord.ui.Modal, title="Bewerbung bei der Army"):
 
         await interaction_act.response.defer(ephemeral=True)
 
-        # Erst HIER wird der Kanal erstellt!
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(
                 read_messages=False
@@ -648,7 +646,6 @@ class BewerbungModal(discord.ui.Modal, title="Bewerbung bei der Army"):
             interaction_act.user.display_name,
         )
 
-        # Nachricht im Log-Kanal aktualisieren
         await interaction_act.message.edit(
             content=(
                 f"✅ **Bewerbung angenommen von {interaction_act.user.mention}**"
@@ -711,7 +708,6 @@ class BewerbungModal(discord.ui.Modal, title="Bewerbung bei der Army"):
             "Bewerbung erfolgreich abgelehnt.", ephemeral=True
         )
 
-    # Bewerbung NUR in den Log-Kanal schicken
     await log_channel.send(embed=embed, view=AdminBewerbungActionView())
     log_action("Bewerbung Eingereicht", f"IC: {self.ic_name.value}", user.name)
 
