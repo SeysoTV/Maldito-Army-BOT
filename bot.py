@@ -13,11 +13,14 @@ from discord.ext import commands, tasks
 DIENST_KANAL_ID = 1562632780297277450  # ERSETZE DIES DURCH DEINE KANAL-ID!
 BEWERBUNG_LOG_KANAL_ID = 1562630883587133450  # KANAL FÜR DIE ADMINGESICHTETEN BEWERBUNGEN!
 TICKET_LOG_KANAL_ID = 1562630985303064707  # KANAL FÜR TICKET-BENACHRICHTIGUNGEN!
+AKTEN_ARCHIV_KANAL_ID = (
+    1562846902469533768  # KANAL FÜR DAS AKTENARCHIV (z. B. #personalakten)!
+)
 
 ROLLE_ARMY = "Army"
 ROLLE_BESUCHER = "Besucher"
 ROLLE_AUSBILDER = "Ausbilder"
-ROLLE_TICKETBEARBEITER = "Ticketbearbeiter"  # Rolle für die Ticket-Bearbeitung!
+ROLLE_TICKETBEARBEITER = "Ticketbearbeiter"
 UHRZEIT_POST = time(hour=15, minute=0)
 
 
@@ -71,6 +74,17 @@ def init_db():
             erstellt_von TEXT
         )
     """)
+  cursor.execute("""
+        CREATE TABLE IF NOT EXISTS personalakten (
+            user_id TEXT PRIMARY KEY,
+            username TEXT,
+            dienstrang TEXT,
+            dienstnummer TEXT,
+            eintraege TEXT,
+            auszeichnungen TEXT,
+            message_id INTEGER
+        )
+    """)
   cursor.execute(
       "INSERT OR IGNORE INTO einstellungen (key, value) VALUES ('sold_betrag',"
       " '50000')"
@@ -111,6 +125,53 @@ def get_einstellung(key):
 
 
 # --- EMBED HELFER ---
+def build_akte_embed(
+    target_user: discord.Member,
+    rang: str,
+    nummer: str,
+    eintraege: str,
+    auszeichnungen: str,
+    bearbeiter_name: str,
+):
+  embed = discord.Embed(
+      title=f"🎖️ Personalakte: {target_user.display_name}",
+      color=discord.Color.from_rgb(44, 62, 80),
+  )
+  embed.set_thumbnail(
+      url=(
+          target_user.avatar.url
+          if target_user.avatar
+          else target_user.default_avatar.url
+      )
+  )
+  embed.add_field(name="👤 Mitglied", value=target_user.mention, inline=True)
+  embed.add_field(
+      name="🪖 Dienstrang", value=rang if rang else "Unbekannt", inline=True
+  )
+  embed.add_field(
+      name="🔢 Dienstnummer",
+      value=f"#{nummer}" if nummer else "N/A",
+      inline=True,
+  )
+  embed.add_field(
+      name="📜 Notizen / Einträge / Vermerke",
+      value=eintraege if eintraege else "Keine Einträge vorhanden.",
+      inline=False,
+  )
+  embed.add_field(
+      name="🏅 Auszeichnungen & Lehrgänge",
+      value=auszeichnungen if auszeichnungen else "Keine Auszeichnungen.",
+      inline=False,
+  )
+  embed.set_footer(
+      text=(
+          f"Zuletzt bearbeitet von {bearbeiter_name} •"
+          f" {datetime.now().strftime('%d.%m.%Y %H:%M')} Uhr"
+      )
+  )
+  return embed
+
+
 def get_bestand_embed():
   conn = sqlite3.connect("army.db")
   cursor = conn.cursor()
@@ -284,6 +345,214 @@ live_log_message = None
 live_kalender_message = None
 
 
+# --- PERSONALAKTEN MODAL & VIEWS ---
+class AkteBearbeitenModal(discord.ui.Modal):
+
+  def __init__(
+      self, target_user: discord.Member, rang="", nummer="", eintraege="", auszeichnungen=""
+  ):
+    super().__init__(title=f"Akte: {target_user.display_name[:20]}")
+    self.target_user = target_user
+
+    self.rang_input = discord.ui.TextInput(
+        label="Dienstrang",
+        placeholder="z.B. Private (PVT) / Corporal (CPL)",
+        default=rang,
+        required=False,
+    )
+    self.nummer_input = discord.ui.TextInput(
+        label="Dienstnummer",
+        placeholder="z.B. 402",
+        default=nummer,
+        required=False,
+    )
+    self.eintraege_input = discord.ui.TextInput(
+        label="Einträge / Vermerke / Notizen",
+        style=discord.TextStyle.paragraph,
+        placeholder="Beförderungen, Abmahnungen oder allgemeine Notizen...",
+        default=eintraege,
+        required=False,
+    )
+    self.auszeichnung_input = discord.ui.TextInput(
+        label="Auszeichnungen / Lehrgänge",
+        style=discord.TextStyle.paragraph,
+        placeholder="z.B. Scharfschützen-Ausbildung, Verdienstmedaille...",
+        default=auszeichnungen,
+        required=False,
+    )
+
+    self.add_item(self.rang_input)
+    self.add_item(self.nummer_input)
+    self.add_item(self.eintraege_input)
+    self.add_item(self.auszeichnung_input)
+
+  async def on_submit(self, interaction: discord.Interaction):
+    guild = interaction.guild
+    user_id = str(self.target_user.id)
+    username = self.target_user.display_name
+
+    rang = self.rang_input.value.strip()
+    nummer = self.nummer_input.value.strip()
+    eintraege = self.eintraege_input.value.strip()
+    auszeichnung = self.auszeichnung_input.value.strip()
+
+    conn = sqlite3.connect("army.db")
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT message_id FROM personalakten WHERE user_id = ?", (user_id,)
+    )
+    row = cursor.fetchone()
+
+    archive_channel = guild.get_channel(AKTEN_ARCHIV_KANAL_ID)
+    msg_id = row[0] if row else None
+    new_msg_id = msg_id
+
+    embed = build_akte_embed(
+        self.target_user,
+        rang,
+        nummer,
+        eintraege,
+        auszeichnung,
+        interaction.user.display_name,
+    )
+
+    if archive_channel:
+      if msg_id:
+        try:
+          msg = await archive_channel.fetch_message(msg_id)
+          await msg.edit(embed=embed)
+        except Exception:
+          msg = await archive_channel.send(embed=embed)
+          new_msg_id = msg.id
+      else:
+        msg = await archive_channel.send(embed=embed)
+        new_msg_id = msg.id
+
+    cursor.execute(
+        """
+        REPLACE INTO personalakten (user_id, username, dienstrang, dienstnummer, eintraege, auszeichnungen, message_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """,
+        (
+            user_id,
+            username,
+            rang,
+            nummer,
+            eintraege,
+            auszeichnung,
+            new_msg_id,
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    log_action(
+        "Personalakte aktualisiert",
+        f"Akte von {username}",
+        interaction.user.display_name,
+    )
+
+    await interaction.response.send_message(
+        f"✅ Personalakte für **{username}** wurde aktualisiert und im"
+        " Archiv gepostet!",
+        ephemeral=True,
+    )
+
+
+class AktenSelectView(discord.ui.View):
+
+  def __init__(self, action_type="edit"):
+    super().__init__(timeout=60)
+    self.action_type = action_type
+
+  @discord.ui.select(
+      cls=discord.ui.UserSelect, placeholder="Wähle das Mitglied aus..."
+  )
+  async def select_user(
+      self, interaction: discord.Interaction, select: discord.ui.UserSelect
+  ):
+    target_user = select.values[0]
+    if not isinstance(target_user, discord.Member):
+      target_user = await interaction.guild.fetch_member(target_user.id)
+
+    user_id = str(target_user.id)
+    conn = sqlite3.connect("army.db")
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT dienstrang, dienstnummer, eintraege, auszeichnungen FROM"
+        " personalakten WHERE user_id = ?",
+        (user_id,),
+    )
+    row = cursor.fetchone()
+    conn.close()
+
+    if self.action_type == "edit":
+      rang = row[0] if row else ""
+      nummer = row[1] if row else ""
+      eintraege = row[2] if row else ""
+      auszeichnung = row[3] if row else ""
+
+      await interaction.response.send_modal(
+          AkteBearbeitenModal(
+              target_user, rang, nummer, eintraege, auszeichnung
+          )
+      )
+    else:
+      if not row:
+        await interaction.response.send_message(
+            f"❌ Für **{target_user.display_name}** existiert noch keine"
+            " Personalakte.",
+            ephemeral=True,
+        )
+      else:
+        embed = build_akte_embed(
+            target_user,
+            row[0],
+            row[1],
+            row[2],
+            row[3],
+            "Datenbank-Abfrage",
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+class PersonalaktenPanelView(discord.ui.View):
+
+  def __init__(self):
+    super().__init__(timeout=None)
+
+  @discord.ui.button(
+      label="Akte erstellen / bearbeiten",
+      style=discord.ButtonStyle.primary,
+      emoji="📝",
+      custom_id="btn_edit_akte",
+  )
+  async def edit_akte(
+      self, interaction: discord.Interaction, button: discord.ui.Button
+  ):
+    await interaction.response.send_message(
+        "Wähle das Mitglied aus, dessen Akte du erstellen oder bearbeiten"
+        " möchtest:",
+        view=AktenSelectView(action_type="edit"),
+        ephemeral=True,
+    )
+
+  @discord.ui.button(
+      label="Akte abrufen",
+      style=discord.ButtonStyle.secondary,
+      emoji="🔍",
+      custom_id="btn_view_akte",
+  )
+  async def view_akte(
+      self, interaction: discord.Interaction, button: discord.ui.Button
+  ):
+    await interaction.response.send_message(
+        "Wähle das Mitglied aus, dessen Akte du einsehen möchtest:",
+        view=AktenSelectView(action_type="view"),
+        ephemeral=True,
+    )
+
+
 # --- AUFSTELLUNG / APPEL ---
 class AufstellungData:
 
@@ -412,7 +681,7 @@ class AufstellungView(discord.ui.View):
     await self.update_attendance(interaction, "spaeter")
 
 
-# --- TICKET SYSTEM (NUR FÜR TICKETBEARBEITER & ADMINS) ---
+# --- TICKET SYSTEM ---
 class TicketErstellenModal(
     discord.ui.Modal, title="Support-Ticket / Beschwerde"
 ):
@@ -439,7 +708,6 @@ class TicketErstellenModal(
         ),
     }
 
-    # Nur Ticketbearbeiter und Admins hinzufügen
     tb_role = discord.utils.get(guild.roles, name=ROLLE_TICKETBEARBEITER)
     for role in guild.roles:
       if role.permissions.administrator or (tb_role and role == tb_role):
@@ -514,7 +782,7 @@ class TicketErstellenModal(
     )
 
 
-# --- BEWERBUNGSSYSTEM (FÜR AUSBILDER & ADMINS) ---
+# --- BEWERBUNGSSYSTEM ---
 class BewerbungModal(discord.ui.Modal, title="Bewerbung bei der Army"):
   ic_name = discord.ui.TextInput(
       label="Dein IC-Name", placeholder="z.B. John Doe", required=True
@@ -1251,6 +1519,7 @@ async def on_ready():
   bot.add_view(SoldKasseView())
   bot.add_view(TicketView())
   bot.add_view(BewerbungView())
+  bot.add_view(PersonalaktenPanelView())
 
   try:
     synced = await bot.tree.sync()
@@ -1265,6 +1534,28 @@ async def on_ready():
 
 
 # --- COMMANDS ---
+@bot.tree.command(
+    name="aktenpanel", description="Sendet das Personalakten-Verwaltungspanel"
+)
+@app_commands.checks.has_permissions(administrator=True)
+async def aktenpanel(interaction: discord.Interaction):
+  embed = discord.Embed(
+      title="📂 Personalakten - Hauptquartier",
+      description=(
+          "Verwalte und erstelle Personalakten der Einheitsmitglieder.\n\n"
+          "• **Akte erstellen / bearbeiten:** Wähle ein Mitglied aus und füge"
+          " Notizen, Rang oder Lehrgänge hinzu.\n"
+          "• **Akte abrufen:** Zeigt dir die Akte eines Mitglieds vertraulich"
+          " an."
+      ),
+      color=discord.Color.from_rgb(44, 62, 80),
+  )
+  await interaction.channel.send(embed=embed, view=PersonalaktenPanelView())
+  await interaction.response.send_message(
+      "Personalakten-Panel gesendet!", ephemeral=True
+  )
+
+
 @bot.tree.command(
     name="ticketpanel", description="Sendet das Support & Ticket Panel"
 )
