@@ -15,8 +15,11 @@ BEWERBUNG_LOG_KANAL_ID = 1562630883587133450  # KANAL FÜR DIE ADMINGESICHTETEN 
 TICKET_LOG_KANAL_ID = 1562630985303064707  # KANAL FÜR TICKET-BENACHRICHTIGUNGEN!
 
 ROLLE_ARMY = "Army"
-ROLLE_BESUCHER = "Besucher"  # Rolle für verifizierte Besucher
-UHRZEIT_POST = time(hour=9, minute=0)
+ROLLE_BESUCHER = "Besucher"
+ROLLE_AUSBILDER = (
+    "Ausbilder"  # <-- Trage hier exakt den Namen deiner Ausbilder-Rolle ein!
+)
+UHRZEIT_POST = time(hour=15, minute=0)
 
 
 # --- DATENBANK EINRICHTUNG ---
@@ -410,7 +413,7 @@ class AufstellungView(discord.ui.View):
     await self.update_attendance(interaction, "spaeter")
 
 
-# --- MODALS & SYSTEMS ---
+# --- TICKET SYSTEM ---
 class TicketErstellenModal(
     discord.ui.Modal, title="Support-Ticket / Beschwerde"
 ):
@@ -437,8 +440,12 @@ class TicketErstellenModal(
         ),
     }
 
+    # Admins und Ausbilder hinzufügen
+    ausbilder_role = discord.utils.get(guild.roles, name=ROLLE_AUSBILDER)
     for role in guild.roles:
-      if role.permissions.administrator:
+      if role.permissions.administrator or (
+          ausbilder_role and role == ausbilder_role
+      ):
         overwrites[role] = discord.PermissionOverwrite(
             read_messages=True, send_messages=True
         )
@@ -510,6 +517,7 @@ class TicketErstellenModal(
     )
 
 
+# --- BEWERBUNGSSYSTEM (MIT AUSBILDER-RECHTEN & CHAT-FOKUS) ---
 class BewerbungModal(discord.ui.Modal, title="Bewerbung bei der Army"):
   ic_name = discord.ui.TextInput(
       label="Dein IC-Name", placeholder="z.B. John Doe", required=True
@@ -531,7 +539,7 @@ class BewerbungModal(discord.ui.Modal, title="Bewerbung bei der Army"):
     guild = interaction.guild
     user = interaction.user
 
-    # 1. Privaten Bewerbungskanal erstellen
+    # 1. Privaten Bewerbungskanal erstellen (Admin + Ausbilder + Bewerber haben Zugriff)
     overwrites = {
         guild.default_role: discord.PermissionOverwrite(read_messages=False),
         user: discord.PermissionOverwrite(
@@ -542,8 +550,11 @@ class BewerbungModal(discord.ui.Modal, title="Bewerbung bei der Army"):
         ),
     }
 
+    ausbilder_role = discord.utils.get(guild.roles, name=ROLLE_AUSBILDER)
     for role in guild.roles:
-      if role.permissions.administrator:
+      if role.permissions.administrator or (
+          ausbilder_role and role == ausbilder_role
+      ):
         overwrites[role] = discord.PermissionOverwrite(
             read_messages=True, send_messages=True
         )
@@ -559,6 +570,7 @@ class BewerbungModal(discord.ui.Modal, title="Bewerbung bei der Army"):
     embed = discord.Embed(
         title=f"🎖️ Neue Bewerbung: {self.ic_name.value}",
         description=(
+            f"Besprecht hier im Chat **wann und wo** das Gespräch stattfindet!\n\n"
             f"**Bewerber:** {user.mention}\n**IC-Name:**"
             f" {self.ic_name.value}\n**OOC-Alter:**"
             f" {self.ooc_alter.value}\n\n**Bewerbungstext:**\n{self.bewerbungstext.value}"
@@ -569,14 +581,14 @@ class BewerbungModal(discord.ui.Modal, title="Bewerbung bei der Army"):
         url=user.avatar.url if user.avatar else user.default_avatar.url
     )
 
-    # 3. Interaktions-Buttons
+    # 3. Interaktions-Buttons (Ohne automatische Army-Rolle beim Annehmen)
     class BewerbungActionView(discord.ui.View):
 
       def __init__(self):
         super().__init__(timeout=None)
 
       @discord.ui.button(
-          label="Annehmen",
+          label="Annehmen (Gespräch beendet)",
           style=discord.ButtonStyle.green,
           emoji="✅",
           custom_id="btn_accept_app",
@@ -588,27 +600,19 @@ class BewerbungModal(discord.ui.Modal, title="Bewerbung bei der Army"):
       ):
         await interaction_act.response.send_message(
             f"✅ Bewerbung wurde von {interaction_act.user.mention}"
-            " **ANGENOMMEN**! Kanal wird in 10 Sekunden gelöscht..."
+            " **AKZEPTIERT**! Kanal wird in 10 Sekunden geschlossen..."
         )
-
-        army_role = discord.utils.get(guild.roles, name=ROLLE_ARMY)
-        besucher_role = discord.utils.get(guild.roles, name=ROLLE_BESUCHER)
-
-        if army_role:
-          await user.add_roles(army_role)
-        if besucher_role and besucher_role in user.roles:
-          await user.remove_roles(besucher_role)
 
         try:
           await user.send(
-              "🎉 **Glückwunsch!** Deine Bewerbung bei der Army wurde"
-              " **ANGENOMMEN**!"
+              "🎉 **Glückwunsch!** Dein Vorgespräch / Deine Bewerbung bei der"
+              " Army war erfolgreich!"
           )
         except Exception:
           pass
 
         log_action(
-            "Bewerbung Angenommen",
+            "Bewerbung Akzeptiert",
             f"Bewerber: {user.display_name}",
             interaction_act.user.display_name,
         )
@@ -631,18 +635,19 @@ class BewerbungModal(discord.ui.Modal, title="Bewerbung bei der Army"):
       ):
         await interaction_act.response.send_message(
             f"❌ Bewerbung wurde von {interaction_act.user.mention}"
-            " **ABGELEHNT**. Kanal wird in 10 Sekunden gelöscht..."
+            " **ABGELEHNT**. Kanal wird in 10 Sekunden geschlossen..."
         )
 
         try:
           await user.send(
-              "Leider wurde deine Bewerbung bei der Army **ABGELEHNT**."
+              "Leider wurde deine Bewerbung bei der Army nach dem Gespräch"
+              " **ABGELEHNT**."
           )
         except Exception:
           pass
 
         log_action(
-            "Bewerbung Ablehnt",
+            "Bewerbung Abgelehnt",
             f"Bewerber: {user.display_name}",
             interaction_act.user.display_name,
         )
@@ -652,10 +657,13 @@ class BewerbungModal(discord.ui.Modal, title="Bewerbung bei der Army"):
         await asyncio.sleep(10)
         await app_channel.delete()
 
+    ping_text = (
+        f"{user.mention} {ausbilder_role.mention if ausbilder_role else ''}"
+    )
     await app_channel.send(
         content=(
-            f"Hallo {user.mention}! Hier ist dein privater Bewerbungskanal. Die"
-            " Führungsebene wird sich in Kürze bei dir melden."
+            f"{ping_text} **Neuer Bewerbungskanal!** Klärt hier im Chat ab,"
+            " wann und wo das Treffen stattfindet."
         ),
         embed=embed,
         view=BewerbungActionView(),
