@@ -11,7 +11,11 @@ from discord.ext import commands, tasks
 # EINSTELLUNGEN FÜR ARMY / MILITÄR
 # ==========================================
 DIENST_KANAL_ID = 123456789012345678  # ERSETZE DIES DURCH DEINE KANAL-ID!
-ROLLE_NAME = "Army"  # Z.B. "Army", "U.S. Army" oder "Soldat"
+BEWERBUNG_LOG_KANAL_ID = 123456789012345678  # KANAL FÜR DIE ADMINGESICHTETEN BEWERBUNGEN!
+TICKET_LOG_KANAL_ID = 123456789012345678  # KANAL FÜR TICKET-BENACHRICHTIGUNGEN!
+
+ROLLE_ARMY = "Army"
+ROLLE_BESUCHER = "Besucher"  # Rolle für verifizierte Besucher
 UHRZEIT_POST = time(hour=15, minute=0)
 
 
@@ -118,7 +122,7 @@ def get_bestand_embed():
           "Aktueller Bestand an Waffen, Munition & Ausrüstung.\n"
           "Aktualisiert sich automatisch bei jeder Entnahme/Einlagerung.\n\n"
       ),
-      color=discord.Color.from_rgb(46, 125, 50),  # Militär-Grün
+      color=discord.Color.from_rgb(46, 125, 50),
   )
 
   if not rows:
@@ -278,7 +282,7 @@ live_log_message = None
 live_kalender_message = None
 
 
-# --- DIENST-AUFSTELLUNG / APPEL ---
+# --- AUFSTELLUNG / APPEL ---
 class AufstellungData:
 
   def __init__(self, thema, datum_zeit, rolle_mention):
@@ -407,6 +411,249 @@ class AufstellungView(discord.ui.View):
 
 
 # --- MODALS ---
+class TicketErstellenModal(
+    discord.ui.Modal, title="Support-Ticket / Beschwerde"
+):
+  thema = discord.ui.TextInput(
+      label="Betreff / Thema", placeholder="z.B. Beschwerde über Soldat X"
+  )
+  beschreibung = discord.ui.TextInput(
+      label="Genaue Beschreibung",
+      style=discord.TextStyle.paragraph,
+      placeholder="Beschreibe dein Anliegen so genau wie möglich...",
+  )
+
+  async def on_submit(self, interaction: discord.Interaction):
+    guild = interaction.guild
+    user = interaction.user
+
+    # Erstelle privaten Ticket-Kanal
+    overwrites = {
+        guild.default_role: discord.PermissionOverwrite(read_messages=False),
+        user: discord.PermissionOverwrite(
+            read_messages=True, send_messages=True
+        ),
+        guild.me: discord.PermissionOverwrite(
+            read_messages=True, send_messages=True
+        ),
+    }
+
+    # Admins auch Rechte geben
+    for role in guild.roles:
+      if role.permissions.administrator:
+        overwrites[role] = discord.PermissionOverwrite(
+            read_messages=True, send_messages=True
+        )
+
+    channel_name = f"ticket-{user.name}".lower().replace(" ", "-")
+    ticket_channel = await guild.create_text_channel(
+        name=channel_name, overwrites=overwrites
+    )
+
+    embed = discord.Embed(
+        title=f"📩 Support Ticket: {self.thema.value}",
+        description=(
+            f"**Erstellt von:** {user.mention}\n**Thema:**"
+            f" {self.thema.value}\n\n**Beschreibung:**\n{self.beschreibung.value}"
+        ),
+        color=discord.Color.from_rgb(231, 76, 60),
+    )
+
+    class TicketCloseView(discord.ui.View):
+
+      def __init__(self):
+        super().__init__(timeout=None)
+
+      @discord.ui.button(
+          label="Ticket schließen",
+          style=discord.ButtonStyle.red,
+          emoji="🔒",
+          custom_id="btn_close_ticket",
+      )
+      async def close(
+          self, interaction_close: discord.Interaction, button: discord.ui.Button
+      ):
+        await interaction_close.response.send_message(
+            "🔒 Ticket wird in 5 Sekunden geschlossen..."
+        )
+        log_action(
+            "Ticket Geschlossen",
+            f"Kanal: {interaction_close.channel.name}",
+            interaction_close.user.display_name,
+        )
+        import asyncio
+
+        await asyncio.sleep(5)
+        await interaction_close.channel.delete()
+
+    await ticket_channel.send(
+        content=f"{user.mention} Willkommen in deinem Ticket!",
+        embed=embed,
+        view=TicketCloseView(),
+    )
+
+    # Benachrichtigung im Log-Kanal
+    log_channel = guild.get_channel(TICKET_LOG_KANAL_ID)
+    if log_channel:
+      log_embed = discord.Embed(
+          title="🚨 Neues Support-Ticket erstellt",
+          description=(
+              f"**User:** {user.mention}\n**Kanal:**"
+              f" {ticket_channel.mention}\n**Betreff:** {self.thema.value}"
+          ),
+          color=discord.Color.orange(),
+      )
+      await log_channel.send(embed=log_embed)
+
+    log_action("Ticket Erstellt", f"Thema: {self.thema.value}", user.display_name)
+
+    await interaction.response.send_message(
+        f"✅ Dein Ticket wurde erstellt: {ticket_channel.mention}",
+        ephemeral=True,
+    )
+
+
+class BewerbungModal(discord.ui.Modal, title="Bewerbung bei der Army"):
+  ic_name = discord.ui.TextInput(
+      label="Dein IC-Name", placeholder="z.B. John Doe"
+  )
+  ooc_alter = discord.ui.TextInput(
+      label="Dein OOC-Alter", placeholder="z.B. 18"
+  )
+  bewerbungstext = discord.ui.TextInput(
+      label="Warum möchtest du zur Army?",
+      style=discord.TextStyle.paragraph,
+      placeholder=(
+          "Schreibe hier deinen Bewerbungstext und deine bisherigen"
+          " Erfahrungen..."
+      ),
+  )
+
+  async def on_submit(self, interaction: discord.Interaction):
+    guild = interaction.guild
+    user = interaction.user
+
+    log_channel = guild.get_channel(BEWERBUNG_LOG_KANAL_ID)
+
+    embed = discord.Embed(
+        title=f"🎖️ Neue Bewerbung von {self.ic_name.value}",
+        description=(
+            f"**Discord-User:** {user.mention}\n**IC-Name:**"
+            f" {self.ic_name.value}\n**OOC-Alter:**"
+            f" {self.ooc_alter.value}\n\n**Bewerbungstext:**\n{self.bewerbungstext.value}"
+        ),
+        color=discord.Color.blue(),
+    )
+    embed.set_thumbnail(
+        url=user.avatar.url if user.avatar else user.default_avatar.url
+    )
+
+    class BewerbungActionView(discord.ui.View):
+
+      def __init__(self):
+        super().__init__(timeout=None)
+
+      @discord.ui.button(
+          label="Annehmen",
+          style=discord.ButtonStyle.green,
+          custom_id="btn_accept_app",
+      )
+      async def accept(
+          self,
+          interaction_act: discord.Interaction,
+          button: discord.ui.Button,
+      ):
+        await interaction_act.response.send_message(
+            f"✅ Bewerbung von {user.mention} wurde von"
+            f" {interaction_act.user.mention} **ANGENOMMEN**!"
+        )
+        try:
+          await user.send(
+              "🎉 Deine Bewerbung bei der Army wurde **ANGENOMMEN**! Bitte"
+              " finde dich im HQ zum Gespräch ein."
+          )
+        except Exception:
+          pass
+        log_action(
+            "Bewerbung Angenommen",
+            f"Bewerber: {self.ic_name.value}",
+            interaction_act.user.display_name,
+        )
+
+      @discord.ui.button(
+          label="Ablehnen",
+          style=discord.ButtonStyle.red,
+          custom_id="btn_reject_app",
+      )
+      async def reject(
+          self,
+          interaction_act: discord.Interaction,
+          button: discord.ui.Button,
+      ):
+        await interaction_act.response.send_message(
+            f"❌ Bewerbung von {user.mention} wurde von"
+            f" {interaction_act.user.mention} **ABGELEHNT**."
+        )
+        try:
+          await user.send("Leider wurde deine Bewerbung bei der Army **ABGELEHNT**.")
+        except Exception:
+          pass
+        log_action(
+            "Bewerbung Ablehnt",
+            f"Bewerber: {self.ic_name.value}",
+            interaction_act.user.display_name,
+        )
+
+    if log_channel:
+      await log_channel.send(embed=embed, view=BewerbungActionView())
+
+    log_action("Bewerbung Eingereicht", f"IC: {self.ic_name.value}", user.name)
+
+    await interaction.response.send_message(
+        "✅ Deine Bewerbung wurde erfolgreich eingereicht und wird von der"
+        " Führungsebene geprüft!",
+        ephemeral=True,
+    )
+
+
+class VerifizierungModal(discord.ui.Modal, title="Besucher Verifizierung"):
+  ic_name = discord.ui.TextInput(
+      label="Dein IC-Name (Vorname Nachname)",
+      placeholder="z.B. John Doe",
+      required=True,
+  )
+
+  async def on_submit(self, interaction: discord.Interaction):
+    name = self.ic_name.value.strip()
+    guild = interaction.guild
+    role = discord.utils.get(guild.roles, name=ROLLE_BESUCHER)
+
+    if not role:
+      await interaction.response.send_message(
+          f"❌ Die Rolle **{ROLLE_BESUCHER}** existiert nicht auf diesem Server!",
+          ephemeral=True,
+      )
+      return
+
+    try:
+      await interaction.user.add_roles(role)
+      try:
+        await interaction.user.edit(nick=name)
+      except Exception:
+        pass
+
+      log_action("Verifizierung", f"Besucher: {name}", interaction.user.name)
+
+      await interaction.response.send_message(
+          f"✅ Erfolgreich verifiziert als **Besucher ({name})**!",
+          ephemeral=True,
+      )
+    except Exception:
+      await interaction.response.send_message(
+          "❌ Fehler beim Zuweisen der Besucher-Rolle.", ephemeral=True
+      )
+
+
 class AbmeldungEinreichenModal(discord.ui.Modal, title="Dienstbefreiung / Urlaub"):
   zeitraum = discord.ui.TextInput(
       label="Zeitraum (TT.MM.JJJJ - TT.MM.JJJJ)",
@@ -562,43 +809,6 @@ class AuslagernModal(discord.ui.Modal, title="Ausrüstung entnehmen"):
     )
 
 
-class RekrutierungModal(discord.ui.Modal, title="Rekruten-Rekrutierung"):
-  ic_name = discord.ui.TextInput(
-      label="Dienstname (Rang Vorname Nachname)",
-      placeholder="z.B. PVT John Doe",
-      required=True,
-  )
-
-  async def on_submit(self, interaction: discord.Interaction):
-    name = self.ic_name.value.strip()
-    guild = interaction.guild
-    role = discord.utils.get(guild.roles, name=ROLLE_NAME)
-
-    if not role:
-      await interaction.response.send_message(
-          f"❌ Die Rolle **{ROLLE_NAME}** existiert nicht auf diesem Server!",
-          ephemeral=True,
-      )
-      return
-
-    try:
-      await interaction.user.add_roles(role)
-      try:
-        await interaction.user.edit(nick=name)
-      except Exception:
-        pass
-
-      log_action("Einstellung/Musterung", f"Name: {name}", interaction.user.name)
-
-      await interaction.response.send_message(
-          f"✅ Erfolgreich gemustert als **{name}**!", ephemeral=True
-      )
-    except Exception:
-      await interaction.response.send_message(
-          "❌ Fehler beim Zuweisen der Dienstrolle.", ephemeral=True
-      )
-
-
 class SoldEintragenModal(
     discord.ui.Modal, title="Kassenbeitrag / Sold eintragen"
 ):
@@ -688,6 +898,40 @@ class SoldWiderrufenModal(discord.ui.Modal, title="Eintrag widerrufen"):
 
 
 # --- PERSISTENTE VIEWS ---
+class TicketView(discord.ui.View):
+
+  def __init__(self):
+    super().__init__(timeout=None)
+
+  @discord.ui.button(
+      label="Ticket erstellen",
+      style=discord.ButtonStyle.primary,
+      emoji="📩",
+      custom_id="btn_create_ticket",
+  )
+  async def ticket(
+      self, interaction: discord.Interaction, button: discord.ui.Button
+  ):
+    await interaction.response.send_modal(TicketErstellenModal())
+
+
+class BewerbungView(discord.ui.View):
+
+  def __init__(self):
+    super().__init__(timeout=None)
+
+  @discord.ui.button(
+      label="Bewerbung einreichen",
+      style=discord.ButtonStyle.green,
+      emoji="📝",
+      custom_id="btn_submit_bewerbung",
+  )
+  async def bewerbung(
+      self, interaction: discord.Interaction, button: discord.ui.Button
+  ):
+    await interaction.response.send_modal(BewerbungModal())
+
+
 class ArmoryView(discord.ui.View):
 
   def __init__(self):
@@ -729,21 +973,21 @@ class ArmoryView(discord.ui.View):
     )
 
 
-class RekrutierungView(discord.ui.View):
+class VerifizierungView(discord.ui.View):
 
   def __init__(self):
     super().__init__(timeout=None)
 
   @discord.ui.button(
-      label="Musterung / Dienstantritt",
+      label="Als Besucher Verifizieren",
       style=discord.ButtonStyle.green,
-      emoji="🎖️",
+      emoji="✅",
       custom_id="btn_rekrutierung",
   )
   async def verifizieren(
       self, interaction: discord.Interaction, button: discord.ui.Button
   ):
-    await interaction.response.send_modal(RekrutierungModal())
+    await interaction.response.send_modal(VerifizierungModal())
 
 
 class AbmeldungView(discord.ui.View):
@@ -868,7 +1112,6 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 @tasks.loop(time=UHRZEIT_POST)
 async def tages_aufstellung_task():
-  # 2 = Mittwoch, 6 = Sonntag
   heute_wochentag = datetime.now().weekday()
   if heute_wochentag not in [2, 6]:
     return
@@ -878,7 +1121,7 @@ async def tages_aufstellung_task():
     return
 
   guild = channel.guild
-  role = discord.utils.get(guild.roles, name=ROLLE_NAME)
+  role = discord.utils.get(guild.roles, name=ROLLE_ARMY)
   role_mention = role.mention if role else "@everyone"
 
   heute_datum = datetime.now().strftime("%d.%m.%Y")
@@ -901,9 +1144,11 @@ async def tages_aufstellung_task():
 @bot.event
 async def on_ready():
   bot.add_view(ArmoryView())
-  bot.add_view(RekrutierungView())
+  bot.add_view(VerifizierungView())
   bot.add_view(AbmeldungView())
   bot.add_view(SoldKasseView())
+  bot.add_view(TicketView())
+  bot.add_view(BewerbungView())
 
   try:
     synced = await bot.tree.sync()
@@ -917,7 +1162,65 @@ async def on_ready():
   print(f"Eingeloggt als {bot.user}")
 
 
-# --- COMMANDS ---
+# --- NEW & UPDATED COMMANDS ---
+@bot.tree.command(
+    name="ticketpanel", description="Sendet das Support & Ticket Panel"
+)
+@app_commands.checks.has_permissions(administrator=True)
+async def ticketpanel(interaction: discord.Interaction):
+  embed = discord.Embed(
+      title="📩 Support & Beschwerden",
+      description=(
+          "Hast du Fragen, Probleme oder eine Beschwerde?\nKlicke auf den Button"
+          " unten, um ein privates Ticket mit der Führungsebene zu"
+          " eröffnen."
+      ),
+      color=discord.Color.from_rgb(231, 76, 60),
+  )
+  await interaction.channel.send(embed=embed, view=TicketView())
+  await interaction.response.send_message(
+      "Ticket-Panel gesendet!", ephemeral=True
+  )
+
+
+@bot.tree.command(
+    name="bewerbungspanel", description="Sendet das Bewerbungspanel"
+)
+@app_commands.checks.has_permissions(administrator=True)
+async def bewerbungspanel(interaction: discord.Interaction):
+  embed = discord.Embed(
+      title="📝 Bewerbung bei der Army",
+      description=(
+          "Möchtest du der Army beitreten?\nKlicke auf den Button unten, um"
+          " deine Bewerbung einzureichen."
+      ),
+      color=discord.Color.from_rgb(46, 204, 113),
+  )
+  await interaction.channel.send(embed=embed, view=BewerbungView())
+  await interaction.response.send_message(
+      "Bewerbungs-Panel gesendet!", ephemeral=True
+  )
+
+
+@bot.tree.command(
+    name="verifizierung", description="Sendet das Besucher-Verifizierungspanel"
+)
+@app_commands.checks.has_permissions(administrator=True)
+async def verifizierung(interaction: discord.Interaction):
+  embed = discord.Embed(
+      title="🎖️ Server Verifizierung (Besucher)",
+      description=(
+          "Willkommen! Klicke unten, um dich zu verifizieren. Du erhältst"
+          f" automatisch die **{ROLLE_BESUCHER}**-Rolle."
+      ),
+      color=discord.Color.from_rgb(52, 152, 219),
+  )
+  await interaction.channel.send(embed=embed, view=VerifizierungView())
+  await interaction.response.send_message(
+      "Verifizierungs-Panel gesendet!", ephemeral=True
+  )
+
+
 @bot.tree.command(
     name="waffenkammer", description="Sendet das Waffenkammer-Panel"
 )
@@ -948,25 +1251,6 @@ async def bestandskanal(interaction: discord.Interaction):
   )
   await interaction.response.send_message(
       "Live-Bestand erfolgreich eingerichtet!", ephemeral=True
-  )
-
-
-@bot.tree.command(
-    name="rekrutierung", description="Sendet das Musterungs-Panel"
-)
-@app_commands.checks.has_permissions(administrator=True)
-async def rekrutierung(interaction: discord.Interaction):
-  embed = discord.Embed(
-      title="🎖️ Army Rekrutierung / Musterung",
-      description=(
-          "Klicke auf **Musterung** und trage deinen Dienstnamen (z. B. PVT John"
-          " Doe) ein."
-      ),
-      color=discord.Color.from_rgb(52, 152, 219),
-  )
-  await interaction.channel.send(embed=embed, view=RekrutierungView())
-  await interaction.response.send_message(
-      "Musterungs-Panel gesendet!", ephemeral=True
   )
 
 
