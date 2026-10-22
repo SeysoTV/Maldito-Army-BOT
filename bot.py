@@ -21,7 +21,7 @@ ROLLE_ARMY = "Army"
 ROLLE_BESUCHER = "Besucher"
 ROLLE_AUSBILDER = "Ausbilder"
 ROLLE_TICKETBEARBEITER = "Ticketbearbeiter"
-UHRZEIT_POST = time(hour=15, minute=0)
+UHRZEIT_POST = time(hour=09, minute=0)
 
 
 # --- DATENBANK EINRICHTUNG ---
