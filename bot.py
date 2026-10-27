@@ -23,7 +23,9 @@ ZIMMER_KANAL_ID = (
 ROLLE_ARMY = "Army"
 ROLLE_BESUCHER = "Besucher"
 ROLLE_AUSBILDER = "Ausbilder"
-ROLLE_TICKETBEARBEITER = "Ticketbearbeiter"
+ROLLE_TICKETBEARBEITER = (
+    "Ticketbearbeiter"  # Rolle für die Ticket-Bearbeitung!
+)
 UHRZEIT_POST = time(hour=15, minute=0)
 
 
@@ -138,7 +140,7 @@ def get_einstellung(key):
   return row[0] if row else None
 
 
-# --- EMBED HELFER ---
+# --- EMBED HELFER (KOMPAKTE ZIMMERANZEIGE) ---
 def get_zimmer_embeds():
   conn = sqlite3.connect("army.db")
   cursor = conn.cursor()
@@ -158,7 +160,10 @@ def get_zimmer_embeds():
         color=discord.Color.from_rgb(52, 152, 219),
     )
 
-    for etage_code, etage_name in [("UG", "Untergeschoss (UG)"), ("OG", "Obergeschoss (OG)")]:
+    for etage_code, etage_name in [
+        ("UG", "Untergeschoss (UG)"),
+        ("OG", "Obergeschoss (OG)"),
+    ]:
       desc = ""
       for r_num in [1, 2, 3, 4]:
         for r_let in ["A", "B"]:
@@ -166,10 +171,11 @@ def get_zimmer_embeds():
           bett_rechts_id = f"H{h}_{etage_code}_{raum_name}_Rechts"
           bett_links_id = f"H{h}_{etage_code}_{raum_name}_Links"
 
-          user_r = belegung.get(bett_rechts_id, "— Freies Bett —")
-          user_l = belegung.get(bett_links_id, "— Freies Bett —")
+          user_r = belegung.get(bett_rechts_id, "—")
+          user_l = belegung.get(bett_links_id, "—")
 
-          desc += f"**{raum_name}**\n  ▸ Rechts: **{user_r}**\n  ▸ Links: **{user_l}**\n\n"
+          # Kompaktes Format in einer Zeile
+          desc += f"`{raum_name}` **R:** {user_r} | **L:** {user_l}\n"
 
       embed.add_field(name=f"📌 {etage_name}", value=desc, inline=False)
 
@@ -998,7 +1004,7 @@ class AufstellungView(discord.ui.View):
     await self.update_attendance(interaction, "spaeter")
 
 
-# --- TICKET SYSTEM ---
+# --- TICKET SYSTEM (NUR FÜR TICKETBEARBEITER & ADMINS) ---
 class TicketErstellenModal(
     discord.ui.Modal, title="Support-Ticket / Beschwerde"
 ):
@@ -2239,4 +2245,3 @@ threading.Thread(target=run_server, daemon=True).start()
 
 # --- BOT STARTEN ---
 TOKEN = os.getenv("DISCORD_TOKEN")
-bot.run(TOKEN)
