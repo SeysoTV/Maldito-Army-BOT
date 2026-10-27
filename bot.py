@@ -16,12 +16,15 @@ TICKET_LOG_KANAL_ID = 1562630985303064707  # KANAL FÜR TICKET-BENACHRICHTIGUNGE
 AKTEN_ARCHIV_KANAL_ID = (
     1562846902469533768  # KANAL FÜR DAS AKTENARCHIV (z. B. #personalakten)!
 )
+ZIMMER_KANAL_ID = (
+    1562649383189880873  # KANAL FÜR DEN LIVE-ZIMMERPLAN (z. B. #zimmeraufteilung)!
+)
 
 ROLLE_ARMY = "Army"
 ROLLE_BESUCHER = "Besucher"
 ROLLE_AUSBILDER = "Ausbilder"
 ROLLE_TICKETBEARBEITER = "Ticketbearbeiter"
-UHRZEIT_POST = time(hour=09, minute=0)
+UHRZEIT_POST = time(hour=15, minute=0)
 
 
 # --- DATENBANK EINRICHTUNG ---
@@ -85,6 +88,17 @@ def init_db():
             message_id INTEGER
         )
     """)
+  cursor.execute("""
+        CREATE TABLE IF NOT EXISTS zimmerbelegung (
+            bett_id TEXT PRIMARY KEY,
+            haus INTEGER,
+            etage TEXT,
+            raum TEXT,
+            seite TEXT,
+            user_id TEXT,
+            username TEXT
+        )
+    """)
   cursor.execute(
       "INSERT OR IGNORE INTO einstellungen (key, value) VALUES ('sold_betrag',"
       " '50000')"
@@ -125,6 +139,65 @@ def get_einstellung(key):
 
 
 # --- EMBED HELFER ---
+def get_zimmer_embeds():
+  conn = sqlite3.connect("army.db")
+  cursor = conn.cursor()
+  cursor.execute(
+      "SELECT bett_id, username FROM zimmerbelegung WHERE username IS NOT NULL"
+      " AND username != ''"
+  )
+  rows = cursor.fetchall()
+  conn.close()
+
+  belegung = {r[0]: r[1] for r in rows}
+  embeds = []
+
+  for h in range(1, 5):
+    embed = discord.Embed(
+        title=f"🏠 Zimmeraufteilung Haus {h}",
+        color=discord.Color.from_rgb(52, 152, 219),
+    )
+
+    for etage_code, etage_name in [("UG", "Untergeschoss (UG)"), ("OG", "Obergeschoss (OG)")]:
+      desc = ""
+      for r_num in [1, 2, 3, 4]:
+        for r_let in ["A", "B"]:
+          raum_name = f"Room {r_num}{r_let}"
+          bett_rechts_id = f"H{h}_{etage_code}_{raum_name}_Rechts"
+          bett_links_id = f"H{h}_{etage_code}_{raum_name}_Links"
+
+          user_r = belegung.get(bett_rechts_id, "— Freies Bett —")
+          user_l = belegung.get(bett_links_id, "— Freies Bett —")
+
+          desc += f"**{raum_name}**\n  ▸ Rechts: **{user_r}**\n  ▸ Links: **{user_l}**\n\n"
+
+      embed.add_field(name=f"📌 {etage_name}", value=desc, inline=False)
+
+    embed.set_footer(
+        text=f"Stand: {datetime.now().strftime('%d.%m.%Y %H:%M')} Uhr"
+    )
+    embeds.append(embed)
+
+  return embeds
+
+
+live_zimmer_messages = []
+
+
+async def update_live_zimmerplan(guild):
+  global live_zimmer_messages
+  if not live_zimmer_messages:
+    return
+
+  embeds = get_zimmer_embeds()
+  try:
+    for idx, msg in enumerate(live_zimmer_messages):
+      if idx < len(embeds):
+        await msg.edit(embed=embeds[idx])
+  except Exception:
+    pass
+
+
 def build_akte_embed(
     target_user: discord.Member,
     rang: str,
@@ -345,11 +418,255 @@ live_log_message = None
 live_kalender_message = None
 
 
+# --- ZIMMERAUFTEILUNG VIEWS ---
+class ZimmerZuweisenView(discord.ui.View):
+
+  def __init__(self):
+    super().__init__(timeout=120)
+    self.selected_user = None
+    self.selected_haus = None
+    self.selected_etage = None
+    self.selected_raum = None
+    self.selected_seite = None
+
+  @discord.ui.select(
+      cls=discord.ui.UserSelect,
+      placeholder="1. Wähle das Mitglied aus...",
+      row=0,
+  )
+  async def select_user(
+      self, interaction: discord.Interaction, select: discord.ui.UserSelect
+  ):
+    self.selected_user = select.values[0]
+    await interaction.response.send_message(
+        f"👤 Gewählt: **{self.selected_user.display_name}**. Wähle nun Haus,"
+        " Etage, Raum und Seite aus:",
+        ephemeral=True,
+    )
+
+  @discord.ui.select(
+      placeholder="2. Haus wählen...",
+      options=[
+          discord.SelectOption(label="Haus 1", value="1", emoji="🏠"),
+          discord.SelectOption(label="Haus 2", value="2", emoji="🏠"),
+          discord.SelectOption(label="Haus 3", value="3", emoji="🏠"),
+          discord.SelectOption(label="Haus 4", value="4", emoji="🏠"),
+      ],
+      row=1,
+  )
+  async def select_haus(
+      self, interaction: discord.Interaction, select: discord.ui.Select
+  ):
+    self.selected_haus = int(select.values[0])
+    await interaction.response.defer(ephemeral=True)
+
+  @discord.ui.select(
+      placeholder="3. Etage wählen...",
+      options=[
+          discord.SelectOption(
+              label="Untergeschoss (UG)", value="UG", emoji="⬇️"
+          ),
+          discord.SelectOption(
+              label="Obergeschoss (OG)", value="OG", emoji="⬆️"
+          ),
+      ],
+      row=2,
+  )
+  async def select_etage(
+      self, interaction: discord.Interaction, select: discord.ui.Select
+  ):
+    self.selected_etage = select.values[0]
+    await interaction.response.defer(ephemeral=True)
+
+  @discord.ui.select(
+      placeholder="4. Raum wählen...",
+      options=[
+          discord.SelectOption(label="Room 1A", value="Room 1A"),
+          discord.SelectOption(label="Room 1B", value="Room 1B"),
+          discord.SelectOption(label="Room 2A", value="Room 2A"),
+          discord.SelectOption(label="Room 2B", value="Room 2B"),
+          discord.SelectOption(label="Room 3A", value="Room 3A"),
+          discord.SelectOption(label="Room 3B", value="Room 3B"),
+          discord.SelectOption(label="Room 4A", value="Room 4A"),
+          discord.SelectOption(label="Room 4B", value="Room 4B"),
+      ],
+      row=3,
+  )
+  async def select_raum(
+      self, interaction: discord.Interaction, select: discord.ui.Select
+  ):
+    self.selected_raum = select.values[0]
+    await interaction.response.defer(ephemeral=True)
+
+  @discord.ui.select(
+      placeholder="5. Bettseite wählen...",
+      options=[
+          discord.SelectOption(label="Rechts", value="Rechts", emoji="👉"),
+          discord.SelectOption(label="Links", value="Links", emoji="👈"),
+      ],
+      row=4,
+  )
+  async def select_seite(
+      self, interaction: discord.Interaction, select: discord.ui.Select
+  ):
+    self.selected_seite = select.values[0]
+
+    if (
+        not self.selected_user
+        or not self.selected_haus
+        or not self.selected_etage
+        or not self.selected_raum
+    ):
+      await interaction.response.send_message(
+          "❌ Bitte wähle zuerst alle Felder (User, Haus, Etage, Raum und"
+          " Seite) aus!",
+          ephemeral=True,
+      )
+      return
+
+    bett_id = f"H{self.selected_haus}_{self.selected_etage}_{self.selected_raum}_{self.selected_seite}"
+    user_id = str(self.selected_user.id)
+    username = self.selected_user.display_name
+
+    conn = sqlite3.connect("army.db")
+    cursor = conn.cursor()
+    cursor.execute(
+        "DELETE FROM zimmerbelegung WHERE user_id = ?", (user_id,)
+    )  # Altes Bett räumen
+    cursor.execute(
+        """
+        REPLACE INTO zimmerbelegung (bett_id, haus, etage, raum, seite, user_id, username)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """,
+        (
+            bett_id,
+            self.selected_haus,
+            self.selected_etage,
+            self.selected_raum,
+            self.selected_seite,
+            user_id,
+            username,
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    log_action(
+        "Zimmereinteilung",
+        f"{username} -> Haus {self.selected_haus} ({self.selected_etage},"
+        f" {self.selected_raum}, Bett {self.selected_seite})",
+        interaction.user.display_name,
+    )
+
+    await update_live_zimmerplan(interaction.guild)
+
+    await interaction.response.send_message(
+        f"✅ **{username}** wurde in **Haus {self.selected_haus}**"
+        f" ({self.selected_etage}, {self.selected_raum}, Bett"
+        f" {self.selected_seite}) eingetragen!",
+        ephemeral=True,
+    )
+
+
+class ZimmerRaeumenView(discord.ui.View):
+
+  def __init__(self):
+    super().__init__(timeout=60)
+
+  @discord.ui.select(
+      cls=discord.ui.UserSelect, placeholder="Wähle das Mitglied aus..."
+  )
+  async def select_user(
+      self, interaction: discord.Interaction, select: discord.ui.UserSelect
+  ):
+    target_user = select.values[0]
+    user_id = str(target_user.id)
+
+    conn = sqlite3.connect("army.db")
+    cursor = conn.cursor()
+    cursor.execute(
+        "DELETE FROM zimmerbelegung WHERE user_id = ?", (user_id,)
+    )
+    deleted = cursor.rowcount
+    conn.commit()
+    conn.close()
+
+    if deleted > 0:
+      log_action(
+          "Bett geräumt",
+          f"Bett von {target_user.display_name} freigegeben",
+          interaction.user.display_name,
+      )
+      await update_live_zimmerplan(interaction.guild)
+      await interaction.response.send_message(
+          f"✅ Das Bett von **{target_user.display_name}** wurde freigegeben!",
+          ephemeral=True,
+      )
+    else:
+      await interaction.response.send_message(
+          f"❌ **{target_user.display_name}** war keinem Bett zugewiesen.",
+          ephemeral=True,
+      )
+
+
+class ZimmerPanelView(discord.ui.View):
+
+  def __init__(self):
+    super().__init__(timeout=None)
+
+  @discord.ui.button(
+      label="Bett zuweisen",
+      style=discord.ButtonStyle.green,
+      emoji="🛏️",
+      custom_id="btn_zimmer_zuweisen",
+  )
+  async def zuweisen(
+      self, interaction: discord.Interaction, button: discord.ui.Button
+  ):
+    await interaction.response.send_message(
+        "Wähle die Daten aus, um ein Bett zuzuweisen:",
+        view=ZimmerZuweisenView(),
+        ephemeral=True,
+    )
+
+  @discord.ui.button(
+      label="Bett räumen",
+      style=discord.ButtonStyle.red,
+      emoji="🚪",
+      custom_id="btn_zimmer_raeumen",
+  )
+  async def raeumen(
+      self, interaction: discord.Interaction, button: discord.ui.Button
+  ):
+    await interaction.response.send_message(
+        "Wähle das Mitglied aus, das aus seinem Zimmer ausziehen soll:",
+        view=ZimmerRaeumenView(),
+        ephemeral=True,
+    )
+
+  @discord.ui.button(
+      label="Übersicht anzeigen",
+      style=discord.ButtonStyle.primary,
+      emoji="📋",
+      custom_id="btn_zimmer_anzeigen",
+  )
+  async def anzeigen(
+      self, interaction: discord.Interaction, button: discord.ui.Button
+  ):
+    embeds = get_zimmer_embeds()
+    await interaction.response.send_message(embeds=embeds, ephemeral=True)
+
+
 # --- PERSONALAKTEN MODAL & VIEWS ---
 class AkteBearbeitenModal(discord.ui.Modal):
 
   def __init__(
-      self, target_user: discord.Member, rang="", nummer="", eintraege="", auszeichnungen=""
+      self,
+      target_user: discord.Member,
+      rang="",
+      nummer="",
+      eintraege="",
+      auszeichnungen="",
   ):
     super().__init__(title=f"Akte: {target_user.display_name[:20]}")
     self.target_user = target_user
@@ -1520,6 +1837,7 @@ async def on_ready():
   bot.add_view(TicketView())
   bot.add_view(BewerbungView())
   bot.add_view(PersonalaktenPanelView())
+  bot.add_view(ZimmerPanelView())
 
   try:
     synced = await bot.tree.sync()
@@ -1534,6 +1852,47 @@ async def on_ready():
 
 
 # --- COMMANDS ---
+@bot.tree.command(
+    name="zimmerpanel", description="Sendet das Zimmeraufteilungs-Verwaltungspanel"
+)
+@app_commands.checks.has_permissions(administrator=True)
+async def zimmerpanel(interaction: discord.Interaction):
+  embed = discord.Embed(
+      title="🏠 Zimmeraufteilung - Verwaltung",
+      description=(
+          "Verwalte die Bettenbelegung aller 4 Häuser:\n\n"
+          "• **🛏️ Bett zuweisen:** Weise einem Mitglied ein Bett in einem Haus"
+          " zu.\n"
+          "• **🚪 Bett räumen:** Entferne ein Mitglied aus seinem Zimmer.\n"
+          "• **📋 Übersicht anzeigen:** Rufe die Belegung vertraulich im Chat"
+          " ab."
+      ),
+      color=discord.Color.from_rgb(52, 152, 219),
+  )
+  await interaction.channel.send(embed=embed, view=ZimmerPanelView())
+  await interaction.response.send_message(
+      "Zimmeraufteilungs-Panel gesendet!", ephemeral=True
+  )
+
+
+@bot.tree.command(
+    name="zimmerplan", description="Erstellt die Live-Zimmeraufteilung"
+)
+@app_commands.checks.has_permissions(administrator=True)
+async def zimmerplan(interaction: discord.Interaction):
+  global live_zimmer_messages
+  live_zimmer_messages = []
+
+  embeds = get_zimmer_embeds()
+  await interaction.response.send_message(
+      "Live-Zimmerplan wird eingerichtet...", ephemeral=True
+  )
+
+  for embed in embeds:
+    msg = await interaction.channel.send(embed=embed)
+    live_zimmer_messages.append(msg)
+
+
 @bot.tree.command(
     name="aktenpanel", description="Sendet das Personalakten-Verwaltungspanel"
 )
