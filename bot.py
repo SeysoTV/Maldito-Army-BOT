@@ -23,9 +23,7 @@ ZIMMER_KANAL_ID = (
 ROLLE_ARMY = "Army"
 ROLLE_BESUCHER = "Besucher"
 ROLLE_AUSBILDER = "Ausbilder"
-ROLLE_TICKETBEARBEITER = (
-    "Ticketbearbeiter"  # Rolle für die Ticket-Bearbeitung!
-)
+ROLLE_TICKETBEARBEITER = "Ticketbearbeiter"
 UHRZEIT_POST = time(hour=15, minute=0)
 
 
@@ -1004,7 +1002,7 @@ class AufstellungView(discord.ui.View):
     await self.update_attendance(interaction, "spaeter")
 
 
-# --- TICKET SYSTEM (NUR FÜR TICKETBEARBEITER & ADMINS) ---
+# --- TICKET SYSTEM ---
 class TicketErstellenModal(
     discord.ui.Modal, title="Support-Ticket / Beschwerde"
 ):
@@ -2245,3 +2243,4 @@ threading.Thread(target=run_server, daemon=True).start()
 
 # --- BOT STARTEN ---
 TOKEN = os.getenv("DISCORD_TOKEN")
+bot.run(TOKEN)
